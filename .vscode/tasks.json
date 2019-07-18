@@ -31,17 +31,27 @@
     },
     {
       "type": "npm",
-      "script": "test-unit",
+      "script": "_test-unit",
       "group": {
         "kind": "test",
         "isDefault": true
+      },
+      "options": {
+        "env": {
+          "NODE_ENV": "development"
+        }
       },
       "problemMatcher": []
     },
     {
       "type": "npm",
-      "script": "test-e2e",
+      "script": "_test-e2e",
       "group": "test",
+      "options": {
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
       "problemMatcher": []
     },
     {
@@ -50,6 +60,18 @@
       "isBackground": true,
       "group": "test",
       "problemMatcher": []
+    },
+    {
+      "label": "build (docker)",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": ["build"]
+    },
+    {
+      "label": "test (docker)",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": ["test"]
     }
   ]
 }

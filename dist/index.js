@@ -15,10 +15,11 @@ class CanvasRenderService {
     constructor(width, height, chartCallback, type, chartJsFactory) {
         this._width = width;
         this._height = height;
-        this._chartJs = (chartJsFactory || defaultChartJsFactory)();
-        this._createCanvas = freshRequire_1.freshRequire('canvas').createCanvas;
-        this._registerFont = freshRequire_1.freshRequire('canvas').registerFont;
+        const canvas = freshRequire_1.freshRequire('canvas');
+        this._createCanvas = canvas.createCanvas;
+        this._registerFont = canvas.registerFont;
         this._type = type;
+        this._chartJs = (chartJsFactory || defaultChartJsFactory)();
         if (chartCallback) {
             chartCallback(this._chartJs);
         }
@@ -127,11 +128,11 @@ class CanvasRenderService {
     renderChart(configuration) {
         const canvas = this._createCanvas(this._width, this._height, this._type);
         canvas.style = {};
+        const context = canvas.getContext('2d');
         // Disable animation (otherwise charts will throw exceptions)
         configuration.options = configuration.options || {};
         configuration.options.responsive = false;
         configuration.options.animation = false;
-        const context = canvas.getContext('2d');
         return new this._chartJs(context, configuration);
     }
 }

@@ -9,7 +9,7 @@ services:
     container_name: chartjs-node-canvas-base
   build:
     image: chartjs-node-canvas-build
-    depends_on: 
+    depends_on:
       - base
     build:
       context: .
@@ -18,7 +18,7 @@ services:
   test:
     image: chartjs-node-canvas-build
     container_name: chartjs-node-canvas-test
-    depends_on: 
+    depends_on:
       - build
     environment:
       - NODE_ENV=test
@@ -26,7 +26,7 @@ services:
     command: npm run test
   production:
     image: chartjs-node-canvas
-    depends_on: 
+    depends_on:
       - test
     build:
       context: .

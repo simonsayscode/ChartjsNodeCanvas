@@ -1,16 +1,16 @@
 import { Stream } from 'stream';
 import { Chart as ChartJS, ChartConfiguration } from 'chart.js';
-import { createCanvas, registerFont } from 'canvas';
+import { createCanvas, registerFont, Canvas, CanvasRenderingContext2D } from 'canvas';
 import { freshRequire } from './freshRequire';
 
 export type ChartCallback = (chartJS: typeof ChartJS) => void | Promise<void>;
+export type ChartJsFactory = () => typeof ChartJS;
 export type CanvasType = 'pdf' | 'svg';
 export type MimeType = 'image/png' | 'image/jpeg' | 'application/pdf' | 'image/svg+xml';
 
-const defaultChartJsFactory: () => typeof ChartJS = () => freshRequire('chart.js');
+const defaultChartJsFactory: ChartJsFactory = () => freshRequire('chart.js');
 
 export class CanvasRenderService {
-
 	private readonly _width: number;
 	private readonly _height: number;
 	private readonly _chartJs: typeof ChartJS;
@@ -27,14 +27,15 @@ export class CanvasRenderService {
 	 * @param type optional The canvas type ('PDF' or 'SVG'), see the [canvas pdf doc](https://github.com/Automattic/node-canvas#pdf-output-support).
 	 * @param chartJsFactory optional provider for chart.js.
 	 */
-	constructor(width: number, height: number, chartCallback?: ChartCallback, type?: CanvasType, chartJsFactory?: () => typeof ChartJS) {
+	constructor(width: number, height: number, chartCallback?: ChartCallback, type?: CanvasType, chartJsFactory?: ChartJsFactory) {
 
 		this._width = width;
 		this._height = height;
-		this._chartJs = (chartJsFactory || defaultChartJsFactory)();
-		this._createCanvas = freshRequire('canvas').createCanvas;
-		this._registerFont = freshRequire('canvas').registerFont;
+		const canvas = freshRequire('canvas');
+		this._createCanvas = canvas.createCanvas;
+		this._registerFont = canvas.registerFont;
 		this._type = type;
+		this._chartJs = (chartJsFactory || defaultChartJsFactory)();
 		if (chartCallback) {
 			chartCallback(this._chartJs);
 		}
@@ -156,12 +157,12 @@ export class CanvasRenderService {
 	private renderChart(configuration: ChartConfiguration): Chart {
 
 		const canvas = this._createCanvas(this._width, this._height, this._type);
-		canvas.style = {};
+		(canvas as any).style = {};
+		const context = canvas.getContext('2d');
 		// Disable animation (otherwise charts will throw exceptions)
 		configuration.options = configuration.options || {};
 		configuration.options.responsive = false;
 		configuration.options.animation = false as any;
-		const context = canvas.getContext('2d');
 		return new this._chartJs(context, configuration);
 	}
 }

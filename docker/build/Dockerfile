@@ -2,7 +2,7 @@ FROM chartjs-node-canvas-base
 
 LABEL maintainer = "sean.m.sobey@gmail.com"
 
-WORKDIR /usr/server
+WORKDIR /usr/app
 
 RUN npm ci --no-color
 

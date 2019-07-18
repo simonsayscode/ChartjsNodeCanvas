@@ -1,4 +1,4 @@
-FROM node:11.14.0-slim
+FROM node:10.16.0-slim
 
 LABEL maintainer = "sean.m.sobey@gmail.com"
 
@@ -8,9 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	# - For canvas
 	fontconfig
 
-WORKDIR /usr/server
+WORKDIR /usr/app
 
-COPY package.json package-lock.json ./
+COPY package.json npm-shrinkwrap.json ./
 
 RUN npm ci --production --no-color
 

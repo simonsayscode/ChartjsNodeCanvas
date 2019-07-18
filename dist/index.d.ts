@@ -2,6 +2,7 @@
 import { Stream } from 'stream';
 import { Chart as ChartJS, ChartConfiguration } from 'chart.js';
 export declare type ChartCallback = (chartJS: typeof ChartJS) => void | Promise<void>;
+export declare type ChartJsFactory = () => typeof ChartJS;
 export declare type CanvasType = 'pdf' | 'svg';
 export declare type MimeType = 'image/png' | 'image/jpeg' | 'application/pdf' | 'image/svg+xml';
 export declare class CanvasRenderService {
@@ -20,7 +21,7 @@ export declare class CanvasRenderService {
      * @param type optional The canvas type ('PDF' or 'SVG'), see the [canvas pdf doc](https://github.com/Automattic/node-canvas#pdf-output-support).
      * @param chartJsFactory optional provider for chart.js.
      */
-    constructor(width: number, height: number, chartCallback?: ChartCallback, type?: CanvasType, chartJsFactory?: () => typeof ChartJS);
+    constructor(width: number, height: number, chartCallback?: ChartCallback, type?: CanvasType, chartJsFactory?: ChartJsFactory);
     /**
      * Render to a data url.
      * @see https://github.com/Automattic/node-canvas#canvastodataurl

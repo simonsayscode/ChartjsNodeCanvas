@@ -1,13 +1,17 @@
 import { strict as assert } from 'assert';
 import { writeFile, readFile } from 'fs';
-import { platform } from 'os';
 import { promisify } from 'util';
+import { parse, format } from 'path';
 import { describe, it } from 'mocha';
 import { ChartConfiguration } from 'chart.js';
-import { freshRequire } from './freshRequire';
 import memwatch from 'node-memwatch';
+import pixelmatch from 'pixelmatch';
+import { PNG } from 'pngjs';
 
-import { CanvasRenderService, ChartCallback } from './';
+import { freshRequire } from './freshRequire';
+
+import { CanvasRenderService, ChartCallback, ChartJsFactory } from './';
+import { CanvasColour } from './canvasColourPlugin';
 
 const writeFileAsync = promisify(writeFile);
 const readFileAsync = promisify(readFile);
@@ -16,9 +20,13 @@ memwatch.on('leak', (info) => {
 	throw new Error(info.reason);
 });
 
+const isLocal = process.env.NODE_ENV === 'development';
+
 describe(CanvasRenderService.name, () => {
 
-	const chartColors = {
+	const colours = {
+		black: 'rgb(0, 0, 0)',
+		white: 'rgb(255, 255, 255)',
 		red: 'rgb(255, 99, 132)',
 		orange: 'rgb(255, 159, 64)',
 		yellow: 'rgb(255, 205, 86)',
@@ -27,33 +35,30 @@ describe(CanvasRenderService.name, () => {
 		purple: 'rgb(153, 102, 255)',
 		grey: 'rgb(201, 203, 207)'
 	};
-	const width = 400;
-	const height = 400;
-	const configuration: ChartConfiguration = {
+	const canvasColourOptions = {
+		enabled: true,
+		canvasColour: '#F5F5F5',
+		borderColour: '#A9A9A9',
+		border: 4,
+	};
+	const defaultConfiguration: ChartConfiguration = {
 		type: 'bar',
 		data: {
 			labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
-			datasets: [{
-				label: '# of Votes',
-				data: [12, 19, 3, 5, 2, 3],
-				backgroundColor: [
-					'rgba(255, 99, 132, 0.2)',
-					'rgba(54, 162, 235, 0.2)',
-					'rgba(255, 206, 86, 0.2)',
-					'rgba(75, 192, 192, 0.2)',
-					'rgba(153, 102, 255, 0.2)',
-					'rgba(255, 159, 64, 0.2)'
-				],
-				borderColor: [
-					'rgba(255,99,132,1)',
-					'rgba(54, 162, 235, 1)',
-					'rgba(255, 206, 86, 1)',
-					'rgba(75, 192, 192, 1)',
-					'rgba(153, 102, 255, 1)',
-					'rgba(255, 159, 64, 1)'
-				],
-				borderWidth: 1
-			}]
+			datasets: [
+				{
+					label: '# of Votes',
+					data: [12, 19, 3, 5, 2, 3],
+					backgroundColor: [
+						colours.red,
+						colours.orange,
+						colours.yellow,
+						colours.green,
+						colours.purple,
+						colours.orange,
+					],
+				}
+			]
 		},
 		options: {
 			scales: {
@@ -63,34 +68,72 @@ describe(CanvasRenderService.name, () => {
 						callback: (value: number) => '$' + value
 					} as any
 				}]
+			},
+			plugins: {
+				annotation: {
+				},
+				canvasColour: canvasColourOptions,
 			}
 		},
-		plugins: {
-			annotation: {
-			}
-		} as any
 	};
-	const chartCallback: ChartCallback = (ChartJS) => {
+	const width = 600;
+	const height = 600;
 
-		ChartJS.defaults.global.responsive = true;
-		ChartJS.defaults.global.maintainAspectRatio = false;
-	};
+	function createSUT(chartCallback?: ChartCallback, chartJsFactory?: ChartJsFactory): CanvasRenderService {
 
-	it.skip('test image', async () => {
-		const canvasRenderService = new CanvasRenderService(width, height, chartCallback);
-		const image = await canvasRenderService.renderToBuffer(configuration);
-		await writeFileAsync('./test.png', image);
-	});
+		return new CanvasRenderService(width, height, chartCallback, undefined, chartJsFactory);
+	}
+
+	async function assertImage(actual: Buffer, expectedPath: string): Promise<void> {
+
+		const expectedData = await readFileAsync(expectedPath);
+		// const isEqual = actual.equals(expected);
+		// if (isLocal && !isEqual) {
+		// 	const pathObj = parse(expectedPath);
+		// 	pathObj.base = `${pathObj.name}-failure${pathObj.ext}`;
+		// 	const path = format(pathObj);
+		// 	await writeFileAsync(path, actual);
+		// }
+		// assert.ok(isEqual, `Expected ${os.EOL}${JSON.stringify(actual)}, to equal ${os.EOL}${JSON.stringify(expected)}`);
+		// await writeFileAsync('./test.png', actual);
+		const expected = new PNG({ width, height });
+		await new Promise<PNG>((resolve, reject) => {
+			expected.parse(expectedData, (error, data) => {
+				if (error) {
+					return reject(error);
+				}
+				resolve(data);
+			});
+		});
+		const diff = isLocal
+			? new PNG({ width, height })
+			: null;
+		// tslint:disable-next-line: no-let
+		let diffPath = null;
+		const numDiffPixels = pixelmatch(actual, expected.data, diff == null ? diff : diff.data, 800, 600, { threshold: 0.1 });
+		if (isLocal) {
+			const pathObj = parse(expectedPath);
+			pathObj.base = `${pathObj.name}-diff{pathObj.ext}`;
+			diffPath = format(pathObj);
+			await writeFileAsync(diffPath, actual);
+		}
+		const baseMessage = `Expected chart to match '${expectedPath}'`;
+		const message = isLocal
+			? baseMessage + `, see the diff at '${diffPath}'`
+			: baseMessage;
+		assert.ok(numDiffPixels === 0, message);
+	}
 
 	it('works with registering plugin', async () => {
 
-		const canvasRenderService = new CanvasRenderService(width, height, (ChartJS) => {
+		const canvasRenderService = createSUT((chartJS) => {
 
 			// (global as any).Chart = ChartJS;
-			ChartJS.plugins.register(freshRequire('chartjs-plugin-annotation'));
+			chartJS.plugins.register(freshRequire('chartjs-plugin-annotation'));
 			// delete (global as any).Chart;
+			chartJS.pluginService.register(new CanvasColour());
 		});
-		const image = await canvasRenderService.renderToBuffer({
+		const configuration: ChartConfiguration = {
 			type: 'bar',
 			data: {
 				labels: ['January', 'February', 'March', 'April', 'May', 'June', 'July'],
@@ -98,23 +141,20 @@ describe(CanvasRenderService.name, () => {
 					{
 						type: 'line',
 						label: 'Dataset 1',
-						borderColor: chartColors.blue,
-						borderWidth: 2,
+						backgroundColor: colours.blue,
 						fill: false,
 						data: [-39, 44, -22, -45, -27, 12, 18]
 					},
 					{
 						type: 'bar',
 						label: 'Dataset 2',
-						backgroundColor: chartColors.red,
+						backgroundColor: colours.red,
 						data: [-18, -43, 36, -37, 1, -1, 26],
-						borderColor: 'white',
-						borderWidth: 2
 					},
 					{
 						type: 'bar',
 						label: 'Dataset 3',
-						backgroundColor: chartColors.green,
+						backgroundColor: colours.green,
 						data: [-7, 21, 1, 7, 34, -29, -36]
 					}
 				]
@@ -159,16 +199,15 @@ describe(CanvasRenderService.name, () => {
 							borderColor: 'rgb(101, 33, 171)',
 							borderWidth: 1,
 						}
-					]
-				}
-			} as any
-		});
-		const testDataPath = platform() === 'win32'
-			? './testData/chartjs-plugin-annotation.png'
-			: './testData/chartjs-plugin-annotation-linux.png';
-		//await writeFileAsync(testDataPath, image);
-		const expected = await readFileAsync(testDataPath);
-		assert.ok(image.equals(expected), `Expected ${JSON.stringify(image)}, to equal ${JSON.stringify(expected)}`);
+					],
+				},
+				plugins: {
+					canvasColour: canvasColourOptions,
+				},
+			} as any,
+		};
+		const image = await canvasRenderService.renderToBuffer(configuration);
+		await assertImage(image, './testData/chartjs-plugin-annotation.png');
 		// const actual = hashCode(image.toString('base64'));
 		// const expected = -1742834127;
 		// assert.equal(actual, expected);
@@ -183,51 +222,57 @@ describe(CanvasRenderService.name, () => {
 			delete require.cache[require.resolve('chartjs-plugin-datalabels')];
 			return chartJS;
 		};
-		const canvasRenderService = new CanvasRenderService(width, height, (/*ChartJS*/) => {
-
+		const canvasRenderService = createSUT((chartJS) => {
 			// (global as any).Chart = ChartJS;
 			// ChartJS.plugins.register(freshRequire('chartjs-plugin-datalabels', require));
 			// delete (global as any).Chart;
-		}, undefined, chartJsFactory);
-		const image = await canvasRenderService.renderToBuffer({
+			chartJS.pluginService.register(new CanvasColour());
+		}, chartJsFactory);
+		const configuration: ChartConfiguration = {
 			type: 'bar',
 			data: {
 				labels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as any,
-				datasets: [{
-					backgroundColor: chartColors.red,
-					data: [12, 19, 3, 5, 2, 3],
-					datalabels: {
-						align: 'end',
-						anchor: 'start'
+				datasets: [
+					{
+						label: 'Dataset 1',
+						backgroundColor: colours.red,
+						data: [12, 19, 3, 5, 2, 3],
+						datalabels: {
+							align: 'end',
+							anchor: 'start'
+						}
+					}, {
+						label: 'Dataset 2',
+						backgroundColor: colours.blue,
+						data: [3, 5, 2, 3, 30, 15, 19, 2],
+						datalabels: {
+							align: 'center',
+							anchor: 'center'
+						}
+					}, {
+						label: 'Dataset 3',
+						backgroundColor: colours.green,
+						data: [12, 19, 3, 5, 2, 3],
+						datalabels: {
+							anchor: 'end',
+							align: 'start',
+						}
 					}
-				}, {
-					backgroundColor: chartColors.blue,
-					data: [3, 5, 2, 3, 30, 15, 19, 2],
-					datalabels: {
-						align: 'center',
-						anchor: 'center'
-					}
-				}, {
-					backgroundColor: chartColors.green,
-					data: [12, 19, 3, 5, 2, 3],
-					datalabels: {
-						anchor: 'end',
-						align: 'start',
-					}
-				}] as any
+				] as any
 			},
 			options: {
 				plugins: {
 					datalabels: {
 						color: 'white',
-						display(context: any): boolean {
+						display: (context: any) => {
 							return context.dataset.data[context.dataIndex] > 15;
 						},
 						font: {
 							weight: 'bold'
 						},
 						formatter: Math.round
-					}
+					},
+					canvasColour: canvasColourOptions
 				},
 				scales: {
 					xAxes: [{
@@ -238,13 +283,9 @@ describe(CanvasRenderService.name, () => {
 					}]
 				}
 			}
-		});
-		const testDataPath = platform() === 'win32'
-			? './testData/chartjs-plugin-datalabels.png'
-			: './testData/chartjs-plugin-datalabels-linux.png';
-		//await writeFileAsync(testDataPath, image);
-		const expected = await readFileAsync(testDataPath);
-		assert.ok(image.equals(expected), `Expected ${JSON.stringify(image)}, to equal ${JSON.stringify(expected)}`);
+		};
+		const image = await canvasRenderService.renderToBuffer(configuration);
+		await assertImage(image, './testData/chartjs-plugin-datalabels.png');
 		// const actual = hashCode(image.toString('base64'));
 		// const expected = -1377895140;
 		// assert.equal(actual, expected);
@@ -256,64 +297,54 @@ describe(CanvasRenderService.name, () => {
 			type: 'bar',
 			data: {
 				labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
-				datasets: [{
-					label: '# of Votes',
-					data: [12, 19, 3, 5, 2, 3],
-					backgroundColor: [
-						'rgba(255, 99, 132, 0.2)',
-						'rgba(54, 162, 235, 0.2)',
-						'rgba(255, 206, 86, 0.2)',
-						'rgba(75, 192, 192, 0.2)',
-						'rgba(153, 102, 255, 0.2)',
-						'rgba(255, 159, 64, 0.2)'
-					],
-					borderColor: [
-						'rgba(255,99,132,1)',
-						'rgba(54, 162, 235, 1)',
-						'rgba(255, 206, 86, 1)',
-						'rgba(75, 192, 192, 1)',
-						'rgba(153, 102, 255, 1)',
-						'rgba(255, 159, 64, 1)'
-					],
-					borderWidth: 1,
-				}]
+				datasets: [
+					{
+						label: 'Number of Votes',
+						data: [12, 19, 3, 5, 2, 3],
+						backgroundColor: [
+							colours.red,
+							colours.orange,
+							colours.yellow,
+							colours.green,
+							colours.purple,
+							colours.orange,
+						],
+					}
+				]
 			},
 			options: {
 				scales: {
 					yAxes: [{
 						ticks: {
 							beginAtZero: true,
-							callback: (value: number) => '$' + value
+							//callback: (value: number) => value
 						} as any
 					}]
+				},
+				plugins: {
+					annotation: {
+					},
+					canvasColour: canvasColourOptions,
 				}
 			},
-			plugins: {
-				annotation: {
-				}
-			} as any
 		};
-		const canvasRenderService = new CanvasRenderService(width, height, (ChartJS) => {
+		const canvasRenderService = createSUT((chartJS) => {
 
-			ChartJS.defaults.global.defaultFontFamily = 'VTKS UNAMOUR';
+			chartJS.defaults.global.defaultFontFamily = 'custom-font';
+			chartJS.pluginService.register(new CanvasColour());
 		});
-		canvasRenderService.registerFont('./testData/VTKS UNAMOUR.ttf', { family: 'VTKS UNAMOUR' });
+		canvasRenderService.registerFont('./testData/VTKS UNAMOUR.ttf', { family: 'custom-font' });
 		const image = await canvasRenderService.renderToBuffer(configuration);
-		const testDataPath = platform() === 'win32'
-			? './testData/font.png'
-			: './testData/font-linux.png';
-		//await writeFileAsync(testDataPath, image);
-		const expected = await readFileAsync(testDataPath);
-		assert.ok(image.equals(expected), `Expected ${JSON.stringify(image)}, to equal ${JSON.stringify(expected)}`);
+		await assertImage(image, './testData/font.png');
 	});
 
-	it('does not leak with new instance', async () => {
+	it.skip('does not leak with new instance', async () => {
 
-		const diffs = await Promise.all([...Array(4).keys()].map((iteration) => {
+		const diffs = await Promise.all(range(4).map((iteration) => {
 			const heapDiff = new memwatch.HeapDiff();
 			console.log('generated heap for iteration ' + (iteration + 1));
-			const canvasRenderService = new CanvasRenderService(width, height, chartCallback);
-			return canvasRenderService.renderToBuffer(configuration, 'image/png')
+			const canvasRenderService = createSUT();
+			return canvasRenderService.renderToBuffer(defaultConfiguration, 'image/png')
 				.then(() => {
 					const diff = heapDiff.end();
 					console.log('generated diff for iteration ' + (iteration + 1));
@@ -325,13 +356,13 @@ describe(CanvasRenderService.name, () => {
 		assert.notDeepEqual(actual, expected);
 	});
 
-	it('does not leak with same instance', async () => {
+	it.skip('does not leak with same instance', async () => {
 
-		const canvasRenderService = new CanvasRenderService(width, height, chartCallback);
-		const diffs = await Promise.all([...Array(4).keys()].map((iteration) => {
+		const canvasRenderService = createSUT();
+		const diffs = await Promise.all(range(4).map((iteration) => {
 			const heapDiff = new memwatch.HeapDiff();
 			console.log('generated heap for iteration ' + (iteration + 1));
-			return canvasRenderService.renderToBuffer(configuration, 'image/png')
+			return canvasRenderService.renderToBuffer(defaultConfiguration, 'image/png')
 				.then(() => {
 					const diff = heapDiff.end();
 					console.log('generated diff for iteration ' + (iteration + 1));
@@ -342,9 +373,15 @@ describe(CanvasRenderService.name, () => {
 		const expected = actual.slice().sort();
 		assert.notDeepEqual(actual, expected);
 	});
+
+	function range(count: number): Array<number> {
+
+		return [...Array(count).keys()];
+	}
 
 	function hashCode(string: string): number {
 
+		// tslint:disable: no-bitwise no-let
 		let hash = 0;
 		if (string.length === 0) {
 			return hash;
@@ -355,5 +392,6 @@ describe(CanvasRenderService.name, () => {
 			hash |= 0; // Convert to 32bit integer
 		}
 		return hash;
+		// tslint:enable: no-bitwise no-let
 	}
 });
