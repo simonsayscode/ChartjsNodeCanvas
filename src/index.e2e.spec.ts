@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { writeFile, readFile } from 'fs';
 import { promisify } from 'util';
-import { parse, format } from 'path';
+import { parse, format, basename } from 'path';
 import { describe, it } from 'mocha';
 import { ChartConfiguration } from 'chart.js';
 import memwatch from 'node-memwatch';
@@ -16,13 +16,15 @@ import { CanvasColour } from './canvasColourPlugin';
 const writeFileAsync = promisify(writeFile);
 const readFileAsync = promisify(readFile);
 
-memwatch.on('leak', (info) => {
-	throw new Error(info.reason);
-});
-
 const isLocal = process.env.NODE_ENV === 'development';
 
 describe(CanvasRenderService.name, () => {
+
+	memwatch.on('leak', (info) => {
+		throw new Error(info.reason);
+	});
+
+	console.log(`Running integration tests in ${isLocal ? 'local' : 'CI'} mode.`)
 
 	const colours = {
 		black: 'rgb(0, 0, 0)',
@@ -84,42 +86,43 @@ describe(CanvasRenderService.name, () => {
 		return new CanvasRenderService(width, height, chartCallback, undefined, chartJsFactory);
 	}
 
-	async function assertImage(actual: Buffer, expectedPath: string): Promise<void> {
+	async function assertImage(actualData: Buffer, expectedPath: string): Promise<void> {
 
 		const expectedData = await readFileAsync(expectedPath);
-		// const isEqual = actual.equals(expected);
-		// if (isLocal && !isEqual) {
-		// 	const pathObj = parse(expectedPath);
-		// 	pathObj.base = `${pathObj.name}-failure${pathObj.ext}`;
-		// 	const path = format(pathObj);
-		// 	await writeFileAsync(path, actual);
-		// }
-		// assert.ok(isEqual, `Expected ${os.EOL}${JSON.stringify(actual)}, to equal ${os.EOL}${JSON.stringify(expected)}`);
-		// await writeFileAsync('./test.png', actual);
-		const expected = new PNG({ width, height });
-		await new Promise<PNG>((resolve, reject) => {
-			expected.parse(expectedData, (error, data) => {
-				if (error) {
-					return reject(error);
-				}
-				resolve(data);
-			});
+		const expected = await new Promise<PNG>((resolve, reject) => {
+			return new PNG({ width, height })
+				.parse(expectedData, (error, png) => !!error ? reject(error) : resolve(png));
 		});
-		const diff = isLocal
-			? new PNG({ width, height })
-			: null;
+		const actual = await new Promise<PNG>((resolve, reject) => {
+			return new PNG({ width, height })
+				.parse(actualData, (error, png) => !!error ? reject(error) : resolve(png));
+		});
+		const diff = new PNG({ width, height });
+		// tslint:disable-next-line: no-let
+		let numDiffPixels = null;
+		// tslint:disable-next-line: no-let
+		let actualPath = null;
+		try {
+			numDiffPixels = pixelmatch(actual.data, expected.data, diff.data, width, height, { threshold: 0.1 });
+		} finally {
+			if (isLocal) {
+				actualPath = renameFile(expectedPath, (baseName) => `${baseName}-actual`);
+				actual.pack();
+				expected.pack();
+				await writeFileAsync(renameFile(expectedPath, (baseName) => `${baseName}-expected`), expected.data);
+				await writeFileAsync(actualPath, actual.data);
+			}
+		}
 		// tslint:disable-next-line: no-let
 		let diffPath = null;
-		const numDiffPixels = pixelmatch(actual, expected.data, diff == null ? diff : diff.data, 800, 600, { threshold: 0.1 });
 		if (isLocal) {
-			const pathObj = parse(expectedPath);
-			pathObj.base = `${pathObj.name}-diff{pathObj.ext}`;
-			diffPath = format(pathObj);
-			await writeFileAsync(diffPath, actual);
+			diffPath = renameFile(expectedPath, (baseName) => `${baseName}-diff`);
+			diff.pack();
+			await writeFileAsync(diffPath, diff.data);
 		}
-		const baseMessage = `Expected chart to match '${expectedPath}'`;
+		const baseMessage = `Expected chart to match '${expectedPath}', pixel count diff: ${numDiffPixels}`;
 		const message = isLocal
-			? baseMessage + `, see the diff at '${diffPath}'`
+			? baseMessage + `, see diff at '${diffPath}', and actual at ${actualPath}`
 			: baseMessage;
 		assert.ok(numDiffPixels === 0, message);
 	}
@@ -127,7 +130,6 @@ describe(CanvasRenderService.name, () => {
 	it('works with registering plugin', async () => {
 
 		const canvasRenderService = createSUT((chartJS) => {
-
 			// (global as any).Chart = ChartJS;
 			chartJS.plugins.register(freshRequire('chartjs-plugin-annotation'));
 			// delete (global as any).Chart;
@@ -338,7 +340,7 @@ describe(CanvasRenderService.name, () => {
 		await assertImage(image, './testData/font.png');
 	});
 
-	it.skip('does not leak with new instance', async () => {
+	it('does not leak with new instance', async () => {
 
 		const diffs = await Promise.all(range(4).map((iteration) => {
 			const heapDiff = new memwatch.HeapDiff();
@@ -356,7 +358,7 @@ describe(CanvasRenderService.name, () => {
 		assert.notDeepEqual(actual, expected);
 	});
 
-	it.skip('does not leak with same instance', async () => {
+	it('does not leak with same instance', async () => {
 
 		const canvasRenderService = createSUT();
 		const diffs = await Promise.all(range(4).map((iteration) => {
@@ -373,6 +375,12 @@ describe(CanvasRenderService.name, () => {
 		const expected = actual.slice().sort();
 		assert.notDeepEqual(actual, expected);
 	});
+
+	function renameFile(filePath: string, renameFunc: (baseName: string) => string): string {
+		const pathObj = parse(filePath);
+		pathObj.base = `${renameFunc(pathObj.name)}${pathObj.ext}`;
+		return format(pathObj);
+	}
 
 	function range(count: number): Array<number> {
 
