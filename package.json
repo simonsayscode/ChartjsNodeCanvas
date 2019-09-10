@@ -31,10 +31,8 @@
   },
   "readme": "README.md",
   "license": "MIT",
-  "dependencies": {
-    "canvas": "^2.4.1"
-  },
   "peerDependencies": {
+    "canvas": "^2.4.1",
     "chart.js": "^2.7.3"
   },
   "devDependencies": {
